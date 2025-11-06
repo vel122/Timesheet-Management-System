@@ -43,13 +43,13 @@ def generate_missing_timesheet_excel():
 			)
 
 			if not timesheet:
-				# ❌ No timesheet found
+				# No timesheet found
 				missing_dates.append(formatdate(current_date))
 			else:
-				# 📝 If draft
+				# If draft
 				if any(t.status == "Draft" for t in timesheet):
 					draft_dates.append(formatdate(current_date))
-				# ✅ Submitted ones ignored
+				# Submitted ones ignored
 
 		if missing_dates or draft_dates:
 			summary.append(
