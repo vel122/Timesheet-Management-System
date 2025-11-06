@@ -160,7 +160,14 @@ app_license = "mit"
 # 		"timesheet_management_system.tasks.monthly"
 # 	],
 # }
-
+scheduler_events = {
+	"cron": {
+		"45 15 * * *": [
+			"timesheet_management_system.timesheet_management_system.report.employee_timesheet_report.employee_timesheet_report.send_weekly_timesheet_report"
+		],
+		"0 18 * * *": ["timesheet_management_system.api.telegram_bot.send_reminder"],
+	}
+}
 # Testing
 # -------
 
@@ -244,4 +251,3 @@ app_license = "mit"
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
-
