@@ -27,6 +27,22 @@ def telegram_webhook():
 			"Employee", fields=["name", "employee_name"], filters={"status": "Active"}
 		)
 
+		today = date.today()
+		start_of_week = today - timedelta(days=today.weekday())
+		end_of_week = start_of_week + timedelta(days=4)
+
+		timesheets = frappe.get_all(
+			"Timesheet",
+			filters={"start_date": ["between", [start_of_week, end_of_week]], "docstatus": 1},
+			fields=["employee", "start_date", "total_hours"],
+		)
+
+		holiday_list = frappe.get_all(
+			"Holiday",
+			filters={"holiday_date": ["between", [start_of_week, end_of_week]]},
+			pluck="holiday_date",
+		)
+
 		if text.lower() == "/employee":
 			if all_employees:
 				msg = "\n".join([f"{e.employee_name} (`{e.name}`)" for e in all_employees])
@@ -37,9 +53,7 @@ def telegram_webhook():
 			return "OK"
 
 		elif text.lower() == "/timesheet":
-			today = date.today()
 			report_date = today - timedelta(days=1)
-
 			if report_date.weekday() == 6:  # Sunday
 				report_date -= timedelta(days=2)
 			elif report_date.weekday() == 5:  # Saturday
@@ -48,16 +62,12 @@ def telegram_webhook():
 				report_date -= timedelta(days=3)
 
 			filled_timesheets = frappe.get_all(
-				"Timesheet",
-				filters={"start_date": report_date, "docstatus": 1},
-				fields=["employee"],
+				"Timesheet", filters={"start_date": report_date, "docstatus": 1}, fields=["employee"]
 			)
 			filled_emp_ids = {t.employee for t in filled_timesheets}
 
 			draft_timesheets = frappe.get_all(
-				"Timesheet",
-				filters={"start_date": report_date, "docstatus": 0},
-				fields=["employee"],
+				"Timesheet", filters={"start_date": report_date, "docstatus": 0}, fields=["employee"]
 			)
 			draft_emp_ids = {t.employee for t in draft_timesheets}
 
@@ -86,7 +96,7 @@ def telegram_webhook():
 			if holiday:
 				msg += "            *Today is a Holiday*\n\n"
 
-			msg += "*Filled*\n" + ("\n".join(filled_list) or "None") + "\n\n"
+			msg += "*Filled*\n" + ("\n".join(filled_list)) + "\n\n"
 			if pending:
 				msg += "*Not Filled*\n" + "\n".join(pending) + "\n\n"
 			if draft:
@@ -101,16 +111,6 @@ def telegram_webhook():
 			return "OK"
 
 		elif text.lower() == "/weeklyhours":
-			today = date.today()
-			start_of_week = today - timedelta(days=today.weekday())
-			end_of_week = start_of_week + timedelta(days=4)
-
-			timesheets = frappe.get_all(
-				"Timesheet",
-				filters={"start_date": ["between", [start_of_week, end_of_week]], "docstatus": 1},
-				fields=["employee", "total_hours"],
-			)
-
 			if not timesheets:
 				msg = f"No timesheet data found for this week ({start_of_week} → {end_of_week})."
 			else:
@@ -124,15 +124,38 @@ def telegram_webhook():
 			return "OK"
 
 		elif text.upper() in [emp.name.upper() for emp in all_employees]:
-			today = date.today()
-			start_of_week = today - timedelta(days=today.weekday())
-			end_of_week = start_of_week + timedelta(days=4)
+			matched_emp = next((emp for emp in all_employees if emp.name.upper() == text.upper()), None)
 
-			timesheets = frappe.get_all(
-				"Timesheet",
-				filters={"start_date": ["between", [start_of_week, end_of_week]], "docstatus": 1},
-				fields=["employee", "total_hours"],
-			)
+			if matched_emp:
+				emp_timesheets = [t for t in timesheets if t.employee == matched_emp.name]
+				filled_days = {t.start_date for t in emp_timesheets}
+
+				missing_days = []
+				current = start_of_week
+				while current <= end_of_week:
+					if current.weekday() < 5 and current not in holiday_list and current not in filled_days:
+						missing_days.append(current)
+					current += timedelta(days=1)
+
+				if emp_timesheets:
+					total_hours = sum(t.total_hours for t in emp_timesheets)
+					msg = (
+						f"*Weekly Timesheet for {matched_emp.employee_name} -{matched_emp.name}*\n"
+						f"*Total Hours Worked*: {total_hours:.1f} hrs\n"
+					)
+					if missing_days:
+						msg += "\n*Pending Days:*\n" + "\n".join(
+							[day.strftime("%Y-%m-%d") for day in missing_days]
+						)
+					else:
+						msg += "\n*All timesheets filled this week!*"
+				else:
+					msg = (
+						f"No timesheet records found for {matched_emp.employee_name} "
+						f"({matched_emp.name}) this week."
+					)
+			else:
+				msg = "Employee not found. Please check the Employee ID and try again."
 
 			payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
 			requests.post(telegram_url, json=payload)
