@@ -8,119 +8,103 @@ from frappe import request
 
 @frappe.whitelist(allow_guest=True)
 def telegram_webhook():
-	bot_token = frappe.conf.get("telegram_bot_token")
-	if not bot_token:
-		frappe.log_error("Missing Telegram bot token", "Telegram Webhook")
-		return "Missing token"
-
-	telegram_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-
 	try:
 		try:
-			data = json.loads(request.data or "{}")
+			data = json.loads(frappe.request.data or "{}")
 		except Exception:
 			data = {}
 
 		message = data.get("message", {})
-		text = (message.get("text") or "").strip().lower()
+		text = (message.get("text") or "").strip()
 		chat_id = message.get("chat", {}).get("id")
 
 		if not text or not chat_id:
 			return "No message or chat_id found"
 
-		if text == "/employee":
-			employees = frappe.get_all(
-				"Employee", fields=["name", "employee_name"], filters={"status": "Active"}
-			)
-			if employees:
-				msg = "\n".join([f"{e.employee_name} (`{e.name}`)" for e in employees])
+		bot_token = frappe.conf.get("telegram_bot_token")
+		telegram_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+		all_employees = frappe.get_all(
+			"Employee", fields=["name", "employee_name"], filters={"status": "Active"}
+		)
+
+		if text.lower() == "/employee":
+			if all_employees:
+				msg = "\n".join([f"{e.employee_name} (`{e.name}`)" for e in all_employees])
 			else:
 				msg = "No active employees found."
 			payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
 			requests.post(telegram_url, json=payload)
 			return "OK"
 
-		elif text == "/timesheet":
+		elif text.lower() == "/timesheet":
 			today = date.today()
 			report_date = today - timedelta(days=1)
 
-			if report_date.weekday() == 6:
+			if report_date.weekday() == 6:  # Sunday
 				report_date -= timedelta(days=2)
-			elif report_date.weekday() == 5:
+			elif report_date.weekday() == 5:  # Saturday
 				report_date -= timedelta(days=1)
-
-			all_employees = frappe.get_all(
-				"Employee", fields=["name", "employee_name"], filters={"status": "Active"}
-			)
+			elif report_date.weekday() == 0:  # Monday
+				report_date -= timedelta(days=3)
 
 			filled_timesheets = frappe.get_all(
-				"Timesheet", filters={"start_date": report_date, "docstatus": 1}, fields=["employee"]
+				"Timesheet",
+				filters={"start_date": report_date, "docstatus": 1},
+				fields=["employee"],
 			)
 			filled_emp_ids = {t.employee for t in filled_timesheets}
 
 			draft_timesheets = frappe.get_all(
-				"Timesheet", filters={"start_date": report_date, "docstatus": 0}, fields=["employee"]
+				"Timesheet",
+				filters={"start_date": report_date, "docstatus": 0},
+				fields=["employee"],
 			)
 			draft_emp_ids = {t.employee for t in draft_timesheets}
 
 			leave_applications = frappe.get_all(
 				"Leave Application",
-				filters={
-					"from_date": ["<=", report_date],
-					"to_date": [">=", report_date],
-				},
+				filters={"from_date": ["<=", report_date], "to_date": [">=", report_date]},
 				fields=["employee"],
 			)
 			leave_ids = {la.employee for la in leave_applications}
 
 			holiday = frappe.db.exists("Holiday", {"holiday_date": report_date})
 
-			filled_list = []
-			pending_on_leave = []
-			pending = []
-			draft = []
+			filled_list, draft, pending, pending_on_leave = [], [], [], []
 
 			for emp in all_employees:
 				if emp.name in filled_emp_ids:
 					filled_list.append(f"{emp.employee_name}")
 				elif emp.name in draft_emp_ids:
 					draft.append(f"{emp.employee_name}")
+				elif emp.name in leave_ids:
+					pending_on_leave.append(f"{emp.employee_name} (Leave Request Raised)")
 				else:
-					if emp.name in leave_ids:
-						pending_on_leave.append(f"{emp.employee_name} (Leave Request Raised)")
-					else:
-						pending.append(f"{emp.employee_name}")
+					pending.append(f"{emp.employee_name}")
 
 			msg = f"*Timesheet Summary for {report_date.strftime('%Y-%m-%d')}:*\n\n"
 			if holiday:
 				msg += "            *Today is a Holiday*\n\n"
-			if filled_list:
-				msg += "*Filled*\n" + "\n".join(filled_list) + "\n\n"
-			else:
-				msg += "*Filled*\n\n\n"
 
-			if pending_on_leave or pending or draft:
-				if pending:
-					msg += "*Not Filled*\n" + "\n".join(pending) + "\n\n"
-				if draft:
-					msg += "*Draft*\n" + "\n".join(draft) + "\n\n"
-				if pending_on_leave:
-					msg += "*Leave*\n" + "\n".join(pending_on_leave) + "\n\n"
-			else:
+			msg += "*Filled*\n" + ("\n".join(filled_list) or "None") + "\n\n"
+			if pending:
+				msg += "*Not Filled*\n" + "\n".join(pending) + "\n\n"
+			if draft:
+				msg += "*Draft*\n" + "\n".join(draft) + "\n\n"
+			if pending_on_leave:
+				msg += "*Leave*\n" + "\n".join(pending_on_leave) + "\n\n"
+			if not (filled_list or pending or draft or pending_on_leave):
 				msg += "*Everyone has filled their timesheet!*"
 
 			payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
 			requests.post(telegram_url, json=payload)
 			return "OK"
 
-		elif text == "/weeklyhours":
+		elif text.lower() == "/weeklyhours":
 			today = date.today()
 			start_of_week = today - timedelta(days=today.weekday())
 			end_of_week = start_of_week + timedelta(days=4)
-
-			all_employees = frappe.get_all(
-				"Employee", fields=["name", "employee_name"], filters={"status": "Active"}
-			)
 
 			timesheets = frappe.get_all(
 				"Timesheet",
@@ -140,15 +124,32 @@ def telegram_webhook():
 			requests.post(telegram_url, json=payload)
 			return "OK"
 
+		elif text.upper() in [emp.name.upper() for emp in all_employees]:
+			today = date.today()
+			start_of_week = today - timedelta(days=today.weekday())
+			end_of_week = start_of_week + timedelta(days=4)
+
+			timesheets = frappe.get_all(
+				"Timesheet",
+				filters={"start_date": ["between", [start_of_week, end_of_week]], "docstatus": 1},
+				fields=["employee", "total_hours"],
+			)
+
+			payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
+			requests.post(telegram_url, json=payload)
+			return "OK"
+
 		else:
-			if text == "/help" or " ":
+			if text.lower() == "/help":
 				msg = (
 					"*Available Commands:*\n"
 					"/employee - List all active employees\n"
 					"/timesheet - Show yesterday's timesheet summary\n"
-					"/weeklyhours - Show Weekly worked hours by employee\n"
+					"/weeklyhours - Show weekly worked hours by employee\n"
 					"/help - Show this help message\n"
 				)
+			else:
+				msg = "Type /help to see available commands."
 
 			payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
 			requests.post(telegram_url, json=payload)
@@ -217,3 +218,20 @@ def generate_reminder_message():
 @frappe.whitelist()
 def send_reminder():
 	frappe.enqueue("timesheet_management_system.api.telegram_bot.generate_reminder_message", queue="long")
+
+
+def generate_day_reminders():
+	msg = "*Please Fill Your Timesheet at the End of the Day*"
+
+	bot_token = frappe.conf.get("telegram_bot_token")
+	chat_id = frappe.conf.get("telegram_chat_id")
+
+	telegram_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+	payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
+	requests.post(telegram_url, json=payload)
+	return "OK"
+
+
+def send_daily_reminders():
+	frappe.enqueue("timesheet_management_system.api.telegram_bot.generate_day_reminders", queue="long")
