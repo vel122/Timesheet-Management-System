@@ -3,7 +3,6 @@ from datetime import date, timedelta
 
 import frappe
 import requests
-from frappe import request
 
 
 @frappe.whitelist(allow_guest=True)
