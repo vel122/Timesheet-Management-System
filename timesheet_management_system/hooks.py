@@ -162,10 +162,11 @@ app_license = "mit"
 # }
 scheduler_events = {
 	"cron": {
-		"45 15 * * *": [
+		"00 09 * * FRI": [
 			"timesheet_management_system.timesheet_management_system.report.employee_timesheet_report.employee_timesheet_report.send_weekly_timesheet_report"
 		],
 		"0 18 * * *": ["timesheet_management_system.api.telegram_bot.send_reminder"],
+		"0 11 * * *": ["timesheet_management_system.api.telegram_bot.send_daily_reminders"],
 	}
 }
 # Testing
