@@ -37,6 +37,10 @@ def telegram_webhook():
 			fields=["employee", "start_date", "total_hours"],
 		)
 
+		leave_application = frappe.get_all(
+			"Leave Application", {"from_date": ["between", [start_of_week, end_of_week]]}, ["employee"]
+		)
+
 		holiday_list = frappe.get_all(
 			"Holiday",
 			filters={"holiday_date": ["between", [start_of_week, end_of_week]]},
@@ -44,10 +48,26 @@ def telegram_webhook():
 		)
 
 		if text.lower() == "/employee":
+			employee_list = []
 			if all_employees:
-				msg = "\n".join([f"{e.employee_name} (`{e.name}`)" for e in all_employees])
+				for e in all_employees:
+					employee_list.append(f"{e.employee_name} (`{e.name}`)")
+			if employee_list:
+				msg = "\n".join(employee_list)
 			else:
 				msg = "No active employees found."
+			payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
+			requests.post(telegram_url, json=payload)
+			return "OK"
+
+		elif text.lower() == "/holidays":
+			if not holiday_list:
+				msg = f"No holidays found for this week ({start_of_week} → {end_of_week})."
+			else:
+				msg = f"*Holidays* ({start_of_week} → {end_of_week})\n"
+				for holiday in holiday_list:
+					msg += f"{holiday}\n"
+
 			payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
 			requests.post(telegram_url, json=payload)
 			return "OK"
@@ -116,19 +136,30 @@ def telegram_webhook():
 			else:
 				msg = f"*Weekly Hours* ({start_of_week} → {end_of_week})\n"
 				for emp in all_employees:
-					total_hours = sum(t.total_hours for t in timesheets if t.employee == emp.name)
-					msg += f"{emp.employee_name} — {total_hours:.1f} hrs\n"
+					total_hours = []
+					for t in timesheets:
+						if t.employee == emp.name:
+							total_hours.append(t.total_hours)
+					msg += f"{emp.employee_name} — {sum(total_hours):.1f} hrs\n"
 
 			payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
 			requests.post(telegram_url, json=payload)
 			return "OK"
 
-		elif text.upper() in [emp.name.upper() for emp in all_employees]:
-			matched_emp = next((emp for emp in all_employees if emp.name.upper() == text.upper()), None)
+		elif text.upper() in [emp.name for emp in all_employees]:
+			matched_emp = next((emp for emp in all_employees if emp.name == text.upper()), None)
 
 			if matched_emp:
-				emp_timesheets = [t for t in timesheets if t.employee == matched_emp.name]
-				filled_days = {t.start_date for t in emp_timesheets}
+				emp_timesheets = []
+				filled_days = set()
+				leave_application = []
+				for t in timesheets:
+					if t.employee == matched_emp.name:
+						emp_timesheets.append(t)
+						filled_days.add(t.start_date)
+				for l in leave_application:
+					if l.employee == matched_emp.name:
+						leave_application.append(l.from_date)
 
 				missing_days = []
 				current = start_of_week
@@ -138,7 +169,10 @@ def telegram_webhook():
 					current += timedelta(days=1)
 
 				if emp_timesheets:
-					total_hours = sum(t.total_hours for t in emp_timesheets)
+					total_hours = []
+					for t in emp_timesheets:
+						total_hours.append(t.total_hours)
+					total_hours = sum(total_hours)
 					msg = (
 						f"*Weekly Timesheet for {matched_emp.employee_name} -{matched_emp.name}*\n"
 						f"*Total Hours Worked*: {total_hours:.1f} hrs\n"
@@ -154,6 +188,18 @@ def telegram_webhook():
 						f"No timesheet records found for {matched_emp.employee_name} "
 						f"({matched_emp.name}) this week."
 					)
+
+				if leave_application:
+					leave = []
+					for l in leave_application:
+						leave.append(l.from_date.strftime("%Y-%m-%d"))
+					msg = f"*Leave Applications for {matched_emp.employee_name} - {matched_emp.name}*\n"
+					if leave:
+						msg += "*Leave Application for this week*\n" + "\n".join(leave)
+					else:
+						msg += "\n*N/A*"
+				else:
+					msg += "\n*No Leave Applications Found*"
 			else:
 				msg = "Employee not found. Please check the Employee ID and try again."
 
@@ -168,6 +214,7 @@ def telegram_webhook():
 					"/employee - List all active employees\n"
 					"/timesheet - Show yesterday's timesheet summary\n"
 					"/weeklyhours - Show weekly worked hours by employee\n"
+					"/holidays - Show holidays for the current week\n"
 					"/help - Show this help message\n"
 				)
 			else:
@@ -225,7 +272,7 @@ def generate_reminder_message():
 
 	telegram_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
-	pending_list_text = "\n".join([f"• {emp}" for emp in pending])
+	pending_list_text = "\n".join([f"{emp}" for emp in pending])
 	msg = (
 		f"*Timesheet Reminder for {report_date.strftime('%Y-%m-%d')}*\n\n"
 		f"The following employees have *not filled* their timesheet yet:\n\n"
@@ -237,9 +284,9 @@ def generate_reminder_message():
 	return "OK"
 
 
-@frappe.whitelist()
 def send_reminder():
-	frappe.enqueue("timesheet_management_system.api.telegram_bot.generate_reminder_message", queue="long")
+	generate_reminder_message()
+	# frappe.enqueue("timesheet_management_system.api.telegram_bot.generate_reminder_message", queue="long")
 
 
 def generate_day_reminders():
@@ -256,4 +303,5 @@ def generate_day_reminders():
 
 
 def send_daily_reminders():
-	frappe.enqueue("timesheet_management_system.api.telegram_bot.generate_day_reminders", queue="long")
+	generate_day_reminders()
+	# frappe.enqueue("timesheet_management_system.api.telegram_bot.generate_day_reminders", queue="long")
